@@ -16,9 +16,9 @@ namespace esphome
     {
         enum CommunicationStatus
         {
-            IDLE,
-            PARSE,
-            SEND
+            READ,
+            PROCESS,
+            WRITE
         };
 
         enum RingBufferStatus
@@ -62,16 +62,15 @@ namespace esphome
         class Wifibox_Comm
         {
         public:
+            uint8_t wifi_status;
+            uint8_t internet_status;
+            uint8_t mqtt_id_request_counter;
+
             Wifibox_Comm(EventRing *event_ring);
-            void communication();
+            bool communication();
             uint8_t read(void);
             uint8_t available(void);
             void write(uint8_t c);
-
-            uint8_t *debug_get_buffer();
-            uint8_t *debug_get_buffer_send();
-            uint8_t *debug_get_ring_buffer();
-            uint8_t *debug_get_ring_buffer_send();
 
         private:
             EventRing *ering;
@@ -84,12 +83,9 @@ namespace esphome
             uint16_t length_send;
             uint8_t buffer_send[BUF_SIZE];
 
-            uint8_t internet_status;
-            uint8_t mqtt_id_request_counter;
-
-            uint8_t packet_read(uint8_t *dst, uint16_t *length);
+            uint8_t packet_unescape(uint8_t *dst, uint16_t *length);
             uint32_t packet_crc32(const void *data, size_t size);
-            uint8_t packet_write(uint8_t *dst, uint16_t length);
+            uint8_t packet_escape(uint8_t *dst, uint16_t length);
 
             uint8_t get_wifi_signal();
 

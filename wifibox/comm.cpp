@@ -7,7 +7,13 @@ namespace esphome
     {
         uint8_t Wifibox_Comm::get_wifi_signal()
         {
-            uint8_t b = 0x19;
+            uint8_t b = 0;
+            // -91 < wifi signal then 0
+            // wifi signal < -80 then 5
+            // wifi signal < -70 then 12
+            // wifi signal < -67 then 18
+            // else 25
+            b = wifi_status;
             if ((internet_status & 1) != 0)
                 b = b | 0x20;
             return b;
@@ -18,94 +24,118 @@ namespace esphome
             ering = event_ring;
             ering->init();
 
-            comm_status = IDLE;
-            tx.status = INACTIVE;
+            comm_status = READ;
+            tx.status = ACTIVE;
             internet_status = 0;
+            wifi_status = 0;
             mqtt_id_request_counter = 0;
         }
 
-        void Wifibox_Comm::communication()
+        bool Wifibox_Comm::communication()
         {
-            if (comm_status == SEND)
+            if (comm_status == WRITE)
             {
-                uint8_t rc = packet_write(buffer_send, length_send);
-                if (rc != 1)
-                    return;
-
-                comm_status = IDLE;
-                return;
-            }
-
-            if (comm_status == IDLE)
-            {
-                uint8_t rc = packet_read((uint8_t *)&buffer, &length);
-                if (rc == 0x3)
+                uint8_t rc = packet_escape(buffer_send, length_send);
+                if (rc == 0)
                 {
-                    comm_status = PARSE;
-                    return;
+                    comm_status = READ;
+                    return false;
                 }
+
+                length_send = 0;
+                return true;
             }
 
-            if (comm_status != PARSE)
-                return;
+            if (comm_status == READ)
+            {
+                uint8_t rc = packet_unescape((uint8_t *)&buffer, &length);
+                if (rc == 0)
+                {
+                    comm_status = READ;
+                    return false;
+                }
+                comm_status = PROCESS;
+                return true;
+            }
 
+            // Packet is not designated to us, switch back to read
             if (buffer[0] != 0x80 || buffer[1] != 0x71)
             {
-                comm_status = IDLE;
-                return;
+                comm_status = READ;
+                return false;
             }
 
-            uint32_t crc;
             memset(buffer_send, 0, BUF_SIZE);
+
             switch (buffer[7])
             {
             case 0x0a: // boiler sends data
                 length_send = packet_0a();
-                comm_status = SEND;
-                return;
+                comm_status = WRITE;
+                return true;
             case 0x0b: // boiler request data
                 length_send = packet_0b();
-                comm_status = SEND;
-                return;
+                comm_status = WRITE;
+                return true;
             case 0x0c: // boiler sends data
                 length_send = packet_0c();
-                comm_status = SEND;
-                return;
+                comm_status = WRITE;
+                return true;
             case 0x0d: // boiler request data
                 length_send = packet_0d();
-                comm_status = SEND;
-                return;
+                comm_status = WRITE;
+                return true;
+            default:
+                ESP_LOGI("comm", "packet %02x is unknown", (uint8_t)buffer[7]);
+                comm_status = READ;
+                return false;
             }
         }
 
         uint16_t Wifibox_Comm::on_key_value(void *ctx, const char *key, const char *value)
         {
-            Wifibox_Comm* self = static_cast<Wifibox_Comm*>(ctx);
-            self->ering->write(key, value);
+            Wifibox_Comm *comm = static_cast<Wifibox_Comm *>(ctx);
+            comm->ering->write(key, value);
+
+            if (strcmp("~SAVE", key) == 0)
+            {
+                comm->mqtt_id_request_counter = 0;
+                comm->internet_status = 0x1f;
+                comm->wifi_status = 0x12;
+            }
+            else if (strcmp("~RESET", key) == 0)
+            {
+                comm->mqtt_id_request_counter = 0;
+                comm->internet_status = 0;
+                comm->wifi_status = 0;
+            }
             return 0;
         }
 
         size_t Wifibox_Comm::packet_0a()
         {
             uint32_t crc;
+            uint16_t seq_number = buffer[8] | (buffer[9] << 8);
 
-            json_parser((char*)buffer + 10, buffer[2] - 3, this, on_key_value);
+            json_parser((char *)buffer + 10, buffer[2] - 3, this, on_key_value);
 
             buffer_send[0] = 0x71;
             buffer_send[1] = 0x80;
             buffer_send[2] = 5;
+            // 3,4,5,6 crc32
             buffer_send[7] = 0xa;
+            buffer_send[8] = seq_number & 0xFF;
+            buffer_send[9] = (seq_number >> 8) & 0xFF;
             buffer_send[10] = internet_status;
             buffer_send[11] = get_wifi_signal();
             crc = packet_crc32(buffer_send + 7, buffer[2]);
             int_to_buf(crc, buffer_send + 3);
-            return 0xc - 1;
+            return 0xc;
         }
 
         size_t Wifibox_Comm::packet_0b()
         {
             uint32_t crc;
-
             uint16_t seq_number = buffer[8] | (buffer[9] << 8);
             size_t l = 0;
 
@@ -121,44 +151,56 @@ namespace esphome
             buffer_send[0] = 0x71;
             buffer_send[1] = 0x80;
             buffer_send[2] = 5 + l;
+            // 3,4,5,6 crc32
             buffer_send[7] = 0xb;
             buffer_send[8] = seq_number & 0xFF;
             buffer_send[9] = (seq_number >> 8) & 0xFF;
             buffer_send[10] = internet_status;
             buffer_send[11] = get_wifi_signal();
-            crc = packet_crc32(buffer_send + 7, buffer_send[2]);
+            crc = packet_crc32(buffer_send + 7, buffer[2]);
             int_to_buf(crc, buffer_send + 3);
-            return 0xc + l - 1;
+            return 0xc + l;
         }
 
         size_t Wifibox_Comm::packet_0c()
         {
             uint32_t crc;
+            uint16_t seq_number = buffer[8] | (buffer[9] << 8);
+
             buffer_send[0] = 0x71;
             buffer_send[1] = 0x80;
             buffer_send[2] = 5;
+            // 3,4,5,6 crc32
             buffer_send[7] = 0xc;
+            buffer_send[8] = seq_number & 0xFF;
+            buffer_send[9] = (seq_number >> 8) & 0xFF;
             buffer_send[10] = internet_status;
             buffer_send[11] = get_wifi_signal();
             crc = packet_crc32(buffer_send + 7, buffer[2]);
             int_to_buf(crc, buffer_send + 3);
-            return 0xc - 1;
+            return 0xc;
         }
 
         size_t Wifibox_Comm::packet_0d()
         {
             uint32_t crc;
+            uint16_t seq_number = buffer[8] | (buffer[9] << 8);
+
             buffer_send[0] = 0x71;
             buffer_send[1] = 0x80;
             buffer_send[2] = 5;
+            // 3,4,5,6 crc32
             buffer_send[7] = 0xd;
+            buffer_send[8] = seq_number & 0xFF;
+            buffer_send[9] = (seq_number >> 8) & 0xFF;
             buffer_send[10] = internet_status;
             buffer_send[11] = get_wifi_signal();
             crc = packet_crc32(buffer_send + 7, buffer[2]);
             int_to_buf(crc, buffer_send + 3);
-            return 0xc - 1;
+            return 0xc;
         }
 
+        // Read a byte from tx buffer if packet is ready, return 0 if packet is not ready
         uint8_t Wifibox_Comm::read(void)
         {
             if (tx.status == PENDING)
@@ -167,6 +209,7 @@ namespace esphome
             return 0;
         }
 
+        // Return 1 if packet is ready to send, return 0 if packet is not ready
         uint8_t Wifibox_Comm::available(void)
         {
             if (tx.status == PENDING)
@@ -180,6 +223,7 @@ namespace esphome
             return 0;
         }
 
+        // Write a byte to rx buffer, if byte is 0xBB start of packet, if byte is 0xEE end of packet and check CRC
         void Wifibox_Comm::write(uint8_t c)
         {
             if (c == 0xBB)
@@ -231,16 +275,11 @@ namespace esphome
             }
         }
 
-        uint8_t Wifibox_Comm::packet_write(uint8_t *data, uint16_t length)
+        // Escape packet and write to tx buffer return 1 if packet is ready to send or is currently being sent, return 0 if packet is not ready
+        uint8_t Wifibox_Comm::packet_escape(uint8_t *data, uint16_t length)
         {
-            if (tx.status != PENDING && tx.status == ACTIVE)
-            {
-                tx.status = INACTIVE;
+            if (tx.status == PENDING)
                 return 1;
-            }
-
-            if (tx.status != INACTIVE)
-                return 0;
 
             if (length == 0)
                 return 0;
@@ -248,7 +287,7 @@ namespace esphome
             uint8_t b;
             tx.write_index = 0;
             tx.write(0xBB);
-            for (uint16_t i = 0; i <= length; i++)
+            for (uint16_t i = 0; i < length; i++)
             {
                 b = data[i];
                 switch (b)
@@ -292,31 +331,16 @@ namespace esphome
 
             tx.status = PENDING;
             tx.read_index = 0;
-            return 0;
+            return 1;
         }
 
-        uint8_t Wifibox_Comm::packet_read(uint8_t *dst, uint16_t *length)
+        // Unescape packet if CRC is ok, return 0 if packet is not ready or CRC error, return 1 if packet is ready and unescaped
+        uint8_t Wifibox_Comm::packet_unescape(uint8_t *dst, uint16_t *length)
         {
-            if (rx.status == INACTIVE)
-                return 1;
-
-            if (rx.status == PENDING)
-                return 0x10;
-
-            if (rx.status == ACTIVE)
-                return 2;
-
             if (rx.status != CRC_OK)
-            {
-                if (rx.status != CRC_ERROR)
-                    return 0;
-
-                rx.status = INACTIVE;
-                return 0x11;
-            }
+                return 0;
 
             uint8_t b;
-            rx.status = INACTIVE;
             *length = 0;
             rx.read_index = 1; // skip 0xBB
 
@@ -325,7 +349,10 @@ namespace esphome
                 // 1st check, read and write index is the same position
                 // 2nd check, is a checksum marker: 0xCC or 0xCD
                 if ((rx.read_index == rx.write_index) || (rx.buffer[rx.read_index] >> 1 == 0x66))
-                    return 3;
+                {
+                    rx.status = ACTIVE;
+                    return 1;
+                }
 
                 b = rx.read();
                 if (b == 0xAA)
@@ -354,7 +381,7 @@ namespace esphome
                 *length = *length + 1;
             } while (true);
 
-            return 0x10;
+            return 0;
         }
 
         uint32_t Wifibox_Comm::packet_crc32(const void *data, size_t size)
@@ -362,26 +389,6 @@ namespace esphome
             uint32_t crc = esphome::wifibox::crc32_reset();
             crc = esphome::wifibox::crc32_add(crc, data, size);
             return esphome::wifibox::crc32_finish(crc);
-        }
-
-        uint8_t *Wifibox_Comm::debug_get_buffer()
-        {
-            return (uint8_t *)&buffer;
-        }
-
-        uint8_t *Wifibox_Comm::debug_get_buffer_send()
-        {
-            return (uint8_t *)&buffer_send;
-        }
-
-        uint8_t *Wifibox_Comm::debug_get_ring_buffer()
-        {
-            return (uint8_t *)&rx.buffer;
-        }
-
-        uint8_t *Wifibox_Comm::debug_get_ring_buffer_send()
-        {
-            return (uint8_t *)&tx.buffer;
         }
     }
 }
