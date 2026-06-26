@@ -128,5 +128,10 @@ namespace esphome
                 }
             }
         }
+
+        void Wifibox::push_json(const char *json) {
+            comm->json_queue_push(json);
+        }
+
     }
 }

@@ -10,6 +10,9 @@
 #include "crc32.h"
 #include "event.h"
 
+#define JSON_QUEUE_MAX_ITEMS 10
+#define JSON_QUEUE_MAX_CHARS 100
+
 namespace esphome
 {
     namespace wifibox
@@ -65,12 +68,16 @@ namespace esphome
             uint8_t wifi_status;
             uint8_t internet_status;
             uint8_t mqtt_id_request_counter;
+            uint8_t json_queue_count = 0;
 
             Wifibox_Comm(EventRing *event_ring);
             bool communication();
             uint8_t read(void);
             uint8_t available(void);
             void write(uint8_t c);
+
+            uint8_t json_queue_push(const char *s);
+            uint8_t json_queue_shift(char *s);
 
         private:
             EventRing *ering;
@@ -82,6 +89,8 @@ namespace esphome
             RingBuffer tx;
             uint16_t length_send;
             uint8_t buffer_send[BUF_SIZE];
+
+            char json_queue[JSON_QUEUE_MAX_ITEMS][JSON_QUEUE_MAX_CHARS] = {0};
 
             uint8_t packet_unescape(uint8_t *dst, uint16_t *length);
             uint32_t packet_crc32(const void *data, size_t size);

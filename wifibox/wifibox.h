@@ -22,6 +22,7 @@ namespace esphome
 
             void publish_sensor();
             void register_sensor(IWifiBoxSensor *sensor);
+            void push_json(const char *json);
 
             static void rs485_worker_task(void *parameters);
 

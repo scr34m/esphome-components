@@ -29,6 +29,7 @@ namespace esphome
             internet_status = 0;
             wifi_status = 0;
             mqtt_id_request_counter = 0;
+            json_queue_count = 0;
         }
 
         bool Wifibox_Comm::communication()
@@ -86,7 +87,7 @@ namespace esphome
                 comm_status = WRITE;
                 return true;
             default:
-                ESP_LOGI("comm", "packet %02x is unknown", (uint8_t)buffer[7]);
+                // ESP_LOGI("comm", "packet %02x is unknown", (uint8_t)buffer[7]);
                 comm_status = READ;
                 return false;
             }
@@ -102,12 +103,14 @@ namespace esphome
                 comm->mqtt_id_request_counter = 0;
                 comm->internet_status = 0x1f;
                 comm->wifi_status = 0x12;
+                comm->json_queue_count = 0;
             }
             else if (strcmp("~RESET", key) == 0)
             {
                 comm->mqtt_id_request_counter = 0;
                 comm->internet_status = 0;
                 comm->wifi_status = 0;
+                comm->json_queue_count = 0;
             }
             return 0;
         }
@@ -146,6 +149,12 @@ namespace esphome
                 for (size_t i = 0; i <= l; i++)
                     buffer_send[12 + i] = json[i];
                 mqtt_id_request_counter = mqtt_id_request_counter + 1;
+            } else if (json_queue_count > 0) {
+                char s[JSON_QUEUE_MAX_CHARS];
+                json_queue_shift(s);
+                l = strlen(s);
+                for (size_t i = 0; i < l; i++)
+                    buffer_send[12 + i] = s[i];
             }
 
             buffer_send[0] = 0x71;
@@ -390,5 +399,42 @@ namespace esphome
             crc = esphome::wifibox::crc32_add(crc, data, size);
             return esphome::wifibox::crc32_finish(crc);
         }
+
+        uint8_t Wifibox_Comm::json_queue_push(const char *s) {
+            // check for duplicates, insert only if not already present
+            for (uint8_t i = 0; i < json_queue_count; i++) {
+                if (strcmp(json_queue[i], s) == 0) {
+                    return 0;
+                }
+            }
+
+            // check queue length
+            if (json_queue_count >= JSON_QUEUE_MAX_ITEMS) {
+                return 0;
+            }
+
+            strncpy(json_queue[json_queue_count], s, JSON_QUEUE_MAX_CHARS - 1);
+            json_queue[json_queue_count][JSON_QUEUE_MAX_CHARS - 1] = '\0';
+
+            json_queue_count++;
+
+            return 1;
+        }
+
+        uint8_t Wifibox_Comm::json_queue_shift(char *s) {
+            if (json_queue_count == 0) {
+                return 0;
+            }
+            
+            strcpy(s, json_queue[0]);
+            
+            for (int i = 1; i < json_queue_count; i++) {
+                strcpy(json_queue[i - 1], json_queue[i]);
+            }
+            
+            json_queue_count--;
+            return 1;
+        }
     }
+    
 }
