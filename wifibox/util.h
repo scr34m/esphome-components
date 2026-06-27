@@ -14,5 +14,6 @@ namespace esphome
         uint8_t crc8_add(uint8_t crc, uint8_t data);
         void int_to_buf(uint32_t value, uint8_t *data);
         uint16_t json_parser(char *buf, uint16_t length, void *ctx, json_key_value_cb on_key_value);
+        void logger_hex(const char *tag, const uint8_t *data, size_t length);
     }
 }

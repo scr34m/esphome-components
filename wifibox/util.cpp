@@ -1,4 +1,5 @@
 #include "util.h"
+#include "esphome.h"
 
 namespace esphome
 {
@@ -205,6 +206,17 @@ namespace esphome
             }
 
             return 0;
+        }
+
+        void logger_hex(const char *tag, const uint8_t *data, size_t length)
+        {
+            char line[length * 3 + 1];
+            char *p = line;
+            for (size_t i = 0; i < length; i++)
+            {
+                p += sprintf(p, "%02X ", data[i]);
+            }
+            ESP_LOGI(tag, "%s", line);
         }
     }
 }

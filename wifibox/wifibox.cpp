@@ -41,45 +41,22 @@ namespace esphome
             Wifibox *instance = (Wifibox *)parameters;
             uint8_t c;
 
-            // Use local buffer to accumulate data before sending
-            uint8_t tx_buffer[BUF_SIZE];
-            int tx_len = 0;
-
-            bool activity;
-
             while (true)
             {
-                // Iterate state machine and handle communication
-                activity = instance->comm->communication();
-
-                // Reading from UART and forwarding to comm
-                while (uart_read_bytes(UART_NUM_2, &c, 1, pdMS_TO_TICKS(0)) > 0)
+                // int n = uart_read_bytes(UART_NUM_2, &c, 1, pdMS_TO_TICKS(1));
+                while (uart_read_bytes(UART_NUM_2, &c, 1, 0) > 0)
                 {
-                    instance->comm->write(c);
-                    activity = true;
+                    instance->comm->rx_write(c);
                 }
 
-                // Reading from comm and forwarding to UART
-                tx_len = 0;
-                while (instance->comm->available() && tx_len < BUF_SIZE)
+                if (instance->comm->communication())
                 {
-                    tx_buffer[tx_len] = instance->comm->read();
-                    tx_len++;
-                }
-
-                if (tx_len > 0)
-                {
-                    uart_write_bytes(UART_NUM_2, (const char *)tx_buffer, tx_len);
-                    activity = true;
-                }
-
-                if (activity)
-                {
-                    taskYIELD();
+                    uart_write_bytes(UART_NUM_2, (const char *)instance->comm->tx_data(), instance->comm->tx_length());
+                    uart_wait_tx_done(UART_NUM_2, pdMS_TO_TICKS(1));
                 }
                 else
                 {
-                    vTaskDelay(pdMS_TO_TICKS(10));
+                    vTaskDelay(pdMS_TO_TICKS(1));
                 }
             }
         }
@@ -102,13 +79,15 @@ namespace esphome
             {
                 has_sensor = 0;
                 auto it = sensors.find(e.key);
-                if (it != sensors.end()) {
+                if (it != sensors.end())
+                {
                     has_sensor = 1;
                     it->second->publish_val(e.value);
                 }
 
-                if (!has_sensor) {
-                  ESP_LOGI("sensor", "event for %s with %s", e.key, e.value);
+                if (!has_sensor)
+                {
+                    ESP_LOGI("sensor", "event for %s with %s", e.key, e.value);
                 }
 
                 if (e.key[0] == 'E' || e.key[0] == 'W')
@@ -129,7 +108,8 @@ namespace esphome
             }
         }
 
-        void Wifibox::push_json(const char *json) {
+        void Wifibox::push_json(const char *json)
+        {
             comm->json_queue_push(json);
         }
 

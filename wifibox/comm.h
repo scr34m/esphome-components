@@ -24,42 +24,21 @@ namespace esphome
             WRITE
         };
 
-        enum RingBufferStatus
+        enum BufferStatus
         {
             INACTIVE,
             PENDING,
             ACTIVE,
-            CRC_OK,
-            CRC_ERROR
+            COMPLETE
         };
 
-        struct RingBuffer
+        struct Buffer
         {
             uint8_t buffer[BUF_SIZE];
-            uint32_t write_index = 0;
-            uint32_t read_index = 0;
-            uint32_t size = BUF_SIZE;
-            uint32_t mask = BUF_SIZE - 1;
-            RingBufferStatus status;
+            uint32_t index = 0;
             uint8_t crc;
             uint8_t crc_disabled;
-
-            RingBufferStatus write_status;
-
-            void write(uint8_t b)
-            {
-                buffer[write_index] = b;
-                write_index = write_index + 1;
-                write_index = write_index & mask;
-            }
-
-            uint8_t read()
-            {
-                uint8_t b = buffer[read_index];
-                read_index = read_index + 1;
-                read_index = read_index & mask;
-                return b;
-            }
+            BufferStatus status;
         };
 
         class Wifibox_Comm
@@ -72,29 +51,29 @@ namespace esphome
 
             Wifibox_Comm(EventRing *event_ring);
             bool communication();
-            uint8_t read(void);
-            uint8_t available(void);
-            void write(uint8_t c);
+            const uint8_t *tx_data() const;
+            uint16_t tx_length() const;
+            void rx_write(uint8_t c);
 
             uint8_t json_queue_push(const char *s);
             uint8_t json_queue_shift(char *s);
 
         private:
             EventRing *ering;
-            CommunicationStatus comm_status;
-            RingBuffer rx;
+
+            Buffer rx;
             uint16_t length;
             uint8_t buffer[BUF_SIZE];
 
-            RingBuffer tx;
+            Buffer tx;
             uint16_t length_send;
             uint8_t buffer_send[BUF_SIZE];
 
             char json_queue[JSON_QUEUE_MAX_ITEMS][JSON_QUEUE_MAX_CHARS] = {0};
 
-            uint8_t packet_unescape(uint8_t *dst, uint16_t *length);
+            bool packet_unescape(uint8_t *dst, uint16_t *length);
             uint32_t packet_crc32(const void *data, size_t size);
-            uint8_t packet_escape(uint8_t *dst, uint16_t length);
+            void packet_escape(uint8_t *dst, uint16_t length);
 
             uint8_t get_wifi_signal();
 
