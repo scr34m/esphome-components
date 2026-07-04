@@ -43,7 +43,6 @@ namespace esphome
 
             while (true)
             {
-                // int n = uart_read_bytes(UART_NUM_2, &c, 1, pdMS_TO_TICKS(1));
                 while (uart_read_bytes(UART_NUM_2, &c, 1, 0) > 0)
                 {
                     instance->comm->rx_write(c);
